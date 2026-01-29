@@ -107,9 +107,8 @@ module.exports = async (req, res) => {
                 for (const sheet of allSheets) {
                     const sheetTitle = sheet.properties.title;
                     
-                    // Skip certain sheets
-                    const ignoreSheets = ['info apt', 'breezewaydata', 'formulas', 'export', 
-                                        'articulos', 'final', 'data base laundry'];
+                    // Skip certain sheets (removed breezewaydata and info apt from ignore list)
+                    const ignoreSheets = ['formulas', 'export', 'articulos', 'final', 'data base laundry'];
                     if (ignoreSheets.some(s => sheetTitle.toLowerCase().includes(s))) {
                         continue;
                     }
@@ -150,16 +149,15 @@ module.exports = async (req, res) => {
                             
                             const qty = cleanNumericValue(qtyRaw);
                             
-                            if (qty > 0) {
-                                allData.push({
-                                    item: itemName,
-                                    qty: qty,
-                                    ciudad: cityName,
-                                    building: sheetTitle,
-                                    responsable: sheetTitle,
-                                    fecha: new Date().toISOString().split('T')[0]
-                                });
-                            }
+                            // Now we include ALL items, even with qty = 0
+                            allData.push({
+                                item: itemName,
+                                qty: qty,
+                                ciudad: cityName,
+                                building: sheetTitle,
+                                responsable: sheetTitle,
+                                fecha: new Date().toISOString().split('T')[0]
+                            });
                         }
                         
                     } catch (sheetError) {
@@ -187,3 +185,6 @@ module.exports = async (req, res) => {
         });
     }
 };
+
+
+Update to show 0 quantities and read BreezewayDATA
