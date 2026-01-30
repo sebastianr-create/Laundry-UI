@@ -11,11 +11,12 @@ try {
     }
 } catch (error) { console.error('Error Auth:', error.message); }
 
-// Función para convertir DD/MM/YYYY a objeto Date comparable
+// Convierte DD/MM/YYYY a un número (timestamp) para comparar fácilmente
 function parseSpanishDate(dateStr) {
-    if (!dateStr || !dateStr.includes('/')) return null;
+    if (!dateStr || typeof dateStr !== 'string' || !dateStr.includes('/')) return null;
     const [day, month, year] = dateStr.split('/');
-    return new Date(year, month - 1, day);
+    // Usamos mediodía (12:00) para evitar problemas de saltos de zona horaria
+    return new Date(year, month - 1, day, 12, 0, 0).getTime();
 }
 
 module.exports = async (req, res) => {
@@ -27,13 +28,14 @@ module.exports = async (req, res) => {
     const { startDate, endDate } = req.query;
     if (!startDate || !endDate) return res.status(400).json({ error: 'Faltan fechas' });
 
-    // Convertir parámetros de la UI a Date (Asumiendo que la UI envía YYYY-MM-DD)
-    const start = new Date(startDate);
-    const end = new Date(endDate);
+    // Convertir parámetros de la UI (YYYY-MM-DD) a timestamps
+    const start = new Date(startDate + "T12:00:00").getTime();
+    const end = new Date(endDate + "T12:00:00").getTime();
 
     try {
         const sheets = google.sheets({ version: 'v4', auth });
 
+        // Traemos los datos
         const [tasksRes, configRes] = await Promise.all([
             sheets.spreadsheets.values.get({ spreadsheetId: SPREADSHEET_ID, range: 'BreezwayData!A:AE' }),
             sheets.spreadsheets.values.get({ spreadsheetId: SPREADSHEET_ID, range: 'Apartamentos_Config!A:U' })
@@ -45,13 +47,19 @@ module.exports = async (req, res) => {
         // 1. MAPEAR CONFIGURACIÓN (Apartamentos_Config)
         const configMap = {};
         const headersConfig = configs[0];
+        
         configs.slice(1).forEach(row => {
-            const aptoName = row[2]; // Columna C
+            const aptoName = row[2] ? row[2].trim() : null; // Columna C
             if (!aptoName) return;
+            
             configMap[aptoName] = {};
-            for (let j = 11; j < row.length; j++) { // Desde Columna L
-                const itemName = headersConfig[j];
-                if (itemName) configMap[aptoName][itemName] = parseInt(row[j]) || 0;
+            // Artículos desde Columna L (índice 11)
+            for (let j = 11; j < row.length; j++) {
+                const itemName = headersConfig[j] ? headersConfig[j].trim() : null;
+                if (itemName) {
+                    const val = String(row[j]).replace(/[$.]/g, '').replace(',', '.');
+                    configMap[aptoName][itemName] = Math.ceil(parseFloat(val)) || 0;
+                }
             }
         });
 
@@ -61,19 +69,20 @@ module.exports = async (req, res) => {
         const pedidoPorEdificio = {};
 
         tasks.slice(1).forEach(row => {
-            const building = row[0];        // Columna A
+            const building = row[0] ? row[0].trim() : "Sin Edificio";
             const type = row[7] || "";      // Columna H
             const fullNameBreezway = row[11] || ""; // Columna L
             const dateStr = row[30];        // Columna AE (Índice 30)
 
-            const completedDate = parseSpanishDate(dateStr);
+            const completedTimestamp = parseSpanishDate(dateStr);
 
-            // Filtro de fecha y tipo
-            if (completedDate && completedDate >= start && completedDate <= end && 
+            // Filtro de fecha y tipo de limpieza
+            if (completedTimestamp && completedTimestamp >= start && completedTimestamp <= end && 
                (type.includes("Co") || type.includes("Refresh"))) {
                 
                 if (!pedidoPorEdificio[building]) pedidoPorEdificio[building] = {};
                 
+                // Fuzzy Match para encontrar el apto
                 const matchedApto = listaAptosConfig.find(nombreCorto => 
                     fullNameBreezway.toLowerCase().includes(nombreCorto.toLowerCase())
                 );
@@ -89,20 +98,24 @@ module.exports = async (req, res) => {
 
         // 3. FORMATO FINAL
         const result = [];
-        Object.keys(pedidoPorEdificio).forEach(edificio => {
+        Object.keys(pedidoPorEdificio).sort().forEach(edificio => {
             Object.keys(pedidoPorEdificio[edificio]).forEach(articulo => {
-                result.push({
-                    building: edificio,
-                    item: articulo,
-                    qty: pedidoPorEdificio[edificio][articulo],
-                    periodo: `${startDate} / ${endDate}`
-                });
+                const qty = pedidoPorEdificio[edificio][articulo];
+                if (qty > 0) {
+                    result.push({
+                        building: edificio,
+                        item: articulo,
+                        qty: qty,
+                        periodo: `${startDate} / ${endDate}`
+                    });
+                }
             });
         });
 
         res.status(200).json({ success: true, data: result });
 
     } catch (error) {
+        console.error('API Error:', error.message);
         res.status(500).json({ success: false, error: error.message });
     }
 };
